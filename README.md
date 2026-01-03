@@ -4,12 +4,16 @@ StackTrack is a self-hosted IT service + ticket management platform.
 
 This repo is a monorepo managed with `pnpm` workspaces (early development / proof of concept).
 
+## Inspiration
+
+Special shout-out to Peppermint — it’s been a big inspiration for this project.
+
 ## Repo structure
 
 - `apps/frontend`: Next.js app (React + TypeScript + Tailwind CSS)
 - `apps/backend`: Fastify API (TypeScript) + Prisma
 - `packages/db`: Shared DB package placeholder
-- `config`: Shared repo config (ESLint/Prettier/TS)
+- `config`: Shared repo config (Prettier/TS)
 
 ## Features (current)
 
@@ -28,8 +32,7 @@ This repo is a monorepo managed with `pnpm` workspaces (early development / proo
 - Email-to-ticket
 - Public API docs + versioning
 - More automation/integrations (e.g. Node-RED)
-- SLA / business-hours logic
-
+- Docker Support
 ## Prerequisites
 
 - Node.js (recommended: current LTS)
@@ -50,13 +53,25 @@ pnpm install
 Run once from the repo root:
 
 ```bash
-pnpm setup
+pnpm bootstrap
 ```
 
 This will:
 
 - Create `apps/backend/.env` from `apps/backend/.env.example` (if missing) and generate `JWT_SECRET` + `COOKIE_SECRET`
 - Create `apps/frontend/.env.local` from `apps/frontend/.env.example` (if missing)
+
+## One-command bootstrap (recommended)
+
+After cloning, this will install dependencies, create env files/secrets, run Prisma migrations, and seed the database:
+
+```bash
+pnpm bootstrap
+```
+
+Notes:
+
+- You still need a Postgres database running and `DATABASE_URL` configured in `apps/backend/.env` (the setup script will materialize it from `DB_*` values by default).
 
 ## Development
 
@@ -100,7 +115,7 @@ Tip: The Prisma client is generated automatically during `pnpm install` and duri
 pnpm format
 ```
 
-Note: `pnpm lint` is not currently wired up (ESLint v9 flat config is not set up in this repo yet).
+Note: `pnpm lint` runs each package's linter (e.g. `apps/backend`, `apps/frontend`).
 
 ## License
 

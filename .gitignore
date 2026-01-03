@@ -1,0 +1,70 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+.pnpm-store/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment variables (ignore real envs, keep templates)
+.env
+.env.*
+.ENV
+.ENV.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Next.js
+.next/
+.next/cache/
+out/
+.vercel/
+
+# Build output / coverage
+dist/
+build/
+coverage/
+*.tsbuildinfo
+*.map
+
+# Tooling caches
+.turbo/
+.cache/
+.eslintcache
+.stylelintcache
+
+# Runtime
+*.pid
+*.pid.lock
+
+# Editors / IDEs
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+.idea/
+*.swp
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Secrets / keys
+*.pem
+*.key
+yes.pub
+
+# Storybook (future)
+storybook-static/
+
+# Local backups
+apps-git-backup.tgz

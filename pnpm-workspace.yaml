@@ -1,0 +1,14 @@
+packages:
+  - apps/*
+  - packages/*
+  - config
+  - scripts
+
+onlyBuiltDependencies:
+  - '@prisma/client'
+  - '@prisma/engines'
+  - '@tailwindcss/oxide'
+  - bcrypt
+  - prisma
+  - sharp
+  - unrs-resolver
