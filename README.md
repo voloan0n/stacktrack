@@ -33,37 +33,31 @@ Special shout-out to Peppermint — it’s been a genuine inspiration for this p
 - Public API docs + versioning
 - More automation/integrations (e.g. Node-RED)
 - Docker Support
-## Prerequisites
 
-- Node.js (recommended: current LTS)
-- `pnpm` (pinned via `packageManager` in `package.json`)
+## One-command install / bootstrap (recommended)
 
-Optional: `corepack enable`
+This is the “fresh machine” installer for Debian/Ubuntu (including Proxmox LXC):
 
-## Install
+- Runs `apt-get update` (and optionally `apt-get upgrade`)
+- Installs Node.js + `pnpm`
+- Installs dependencies (`pnpm install`)
+- Creates `apps/backend/.env` + `apps/frontend/.env.local` and generates secrets
+- Installs/starts local PostgreSQL, creates the app role/database
+- Runs Prisma generate + migrations + seed
 
 From the repo root:
 
 ```bash
-pnpm install
+sudo bash scripts/install.sh --yes
 ```
 
-## Environment setup
-
-Run once from the repo root:
+If you see “Permission denied”, run it explicitly via `bash` (no execute bit required):
 
 ```bash
-pnpm bootstrap
+sudo bash scripts/install.sh
 ```
 
-This will:
-
-- Create `apps/backend/.env` from `apps/backend/.env.example` (if missing) and generate `JWT_SECRET` + `COOKIE_SECRET` + `APP_SECRET`
-- Create `apps/frontend/.env.local` from `apps/frontend/.env.example` (if missing)
-
-## One-command bootstrap (recommended)
-
-After cloning, this will install dependencies, create env files/secrets, run Prisma migrations, and seed the database:
+If you already have Node.js + `pnpm` installed and just want to (re)bootstrap the repo (no apt / no Node install):
 
 ```bash
 pnpm bootstrap
@@ -74,15 +68,29 @@ pnpm bootstrap
 This removes generated env files, build artifacts, workspace `node_modules`, and (by default) drops the local Postgres db/role based on `apps/backend/.env`:
 
 ```bash
-pnpm uninstall -- --dry-run
-pnpm uninstall -- --yes
+pnpm run uninstall -- --dry-run
+pnpm run uninstall -- --yes
 ```
 
 To keep the database, add `--skip-db`.
 
+If `pnpm` isn’t available, you can run the script directly:
+
+```bash
+bash scripts/uninstall.sh --dry-run
+```
+
+## Upgrade
+
+Pull the latest changes and re-run bootstrap:
+
+```bash
+bash scripts/upgrade.sh
+```
+
 Notes:
 
-- You still need a Postgres database running and `DATABASE_URL` configured in `apps/backend/.env` (the setup script will materialize it from `DB_*` values by default).
+- By default the installer sets up a local Postgres database on `localhost:5432`. If you point `DB_HOST` at a remote database, role/database creation is skipped and Prisma may fail until you provision it yourself.
 
 ## Development
 

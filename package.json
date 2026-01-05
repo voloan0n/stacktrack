@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "packageManager": "pnpm@10.25.0",
   "scripts": {
-    "bootstrap": "node scripts/install.mjs",
+    "bootstrap": "bash scripts/install.sh --skip-system --skip-node",
     "dev": "pnpm --parallel --filter backend --filter frontend dev",
     "dev:backend": "pnpm --filter backend dev",
     "dev:frontend": "pnpm --filter frontend dev",
@@ -16,7 +16,8 @@
     "start:frontend": "pnpm --filter frontend start",
     "lint": "pnpm -r lint",
     "format": "prettier --config config/prettier.config.js --write \"**/*.{ts,tsx,md,json,yml,yaml}\"",
-    "uninstall": "node scripts/uninstall.mjs"
+    "uninstall": "bash scripts/uninstall.sh",
+    "upgrade": "bash scripts/upgrade.sh"
   },
   "devDependencies": {
     "prettier": "^3.2.5"
