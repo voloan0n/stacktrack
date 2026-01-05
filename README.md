@@ -6,7 +6,7 @@ This repo is a monorepo managed with `pnpm` workspaces (early development / proo
 
 ## Inspiration
 
-Special shout-out to Peppermint — it’s been a big inspiration for this project.
+Special shout-out to Peppermint — it’s been a genuine inspiration for this project. Their work helped shape how I think about a clean, approachable helpdesk experience, and I’m grateful for the time and care they’ve put into building and sharing it with the community.
 
 ## Repo structure
 
