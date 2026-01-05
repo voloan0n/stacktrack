@@ -51,6 +51,8 @@ From the repo root:
 sudo bash scripts/install.sh --yes
 ```
 
+At the end of the install, the script prints the initial admin login credentials (email + generated password).
+
 If you see “Permission denied”, run it explicitly via `bash` (no execute bit required):
 
 ```bash
