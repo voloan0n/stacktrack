@@ -74,7 +74,8 @@ env_get() {
 
 psql_as_postgres() {
   local sql="$1"
-  su - postgres -c "psql -v ON_ERROR_STOP=1 -tAc \"$sql\""
+  # `-X` ignores ~/.psqlrc so output is stable (no footers/format tweaks).
+  su - postgres -c "psql -X -q -P footer=off -v ON_ERROR_STOP=1 -tAc \"$sql\""
 }
 
 drop_db_and_role() {
@@ -150,4 +151,3 @@ main() {
 }
 
 main
-

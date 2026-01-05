@@ -92,6 +92,16 @@ confirm() {
   esac
 }
 
+prompt_secret() {
+  local question="$1"
+  local out_var="$2"
+  local value=""
+  read -r -s -p "${question}: " value
+  printf '\n'
+  # shellcheck disable=SC2034
+  printf -v "$out_var" '%s' "$value"
+}
+
 run() {
   if [[ "$VERBOSE" -eq 1 ]]; then
     "$@"
@@ -335,7 +345,20 @@ ensure_postgres() {
 
 psql_as_postgres() {
   local sql="$1"
-  su - postgres -c "psql -v ON_ERROR_STOP=1 -tAc \"$sql\""
+  # `-X` ignores ~/.psqlrc so output is stable (no footers/format tweaks).
+  su - postgres -c "psql -X -q -P footer=off -v ON_ERROR_STOP=1 -tAc \"$sql\""
+}
+
+can_connect_db() {
+  local db_host="$1"
+  local db_port="$2"
+  local db_user="$3"
+  local db_pass="$4"
+  local db_name="$5"
+
+  PGPASSWORD="$db_pass" psql -X -q -P footer=off -w \
+    -h "$db_host" -p "$db_port" -U "$db_user" -d "$db_name" \
+    -v ON_ERROR_STOP=1 -tAc "SELECT 1" >/dev/null 2>&1
 }
 
 ensure_db_role_and_database() {
@@ -374,21 +397,62 @@ ensure_db_role_and_database() {
 
   local role_exists db_exists
   role_exists="$(psql_as_postgres "SELECT 1 FROM pg_roles WHERE rolname='${db_user//\'/\'\'}'" | tr -d '[:space:]')"
+  db_exists="$(psql_as_postgres "SELECT 1 FROM pg_database WHERE datname='${db_name//\'/\'\'}'" | tr -d '[:space:]')"
+
   if [[ "$role_exists" != "1" ]]; then
     info "Creating DB role"
     psql_as_postgres "CREATE ROLE \"${db_user//\"/\"\"}\" WITH LOGIN PASSWORD '${db_pass//\'/\'\'}';" >/dev/null
   else
-    info "DB role already exists (syncing password)"
-    psql_as_postgres "ALTER ROLE \"${db_user//\"/\"\"}\" WITH LOGIN PASSWORD '${db_pass//\'/\'\'}';" >/dev/null
+    info "DB role already exists"
   fi
 
-  db_exists="$(psql_as_postgres "SELECT 1 FROM pg_database WHERE datname='${db_name//\'/\'\'}'" | tr -d '[:space:]')"
   if [[ "$db_exists" != "1" ]]; then
     info "Creating database"
     psql_as_postgres "CREATE DATABASE \"${db_name//\"/\"\"}\" OWNER \"${db_user//\"/\"\"}\";" >/dev/null
   else
     info "Database already exists"
   fi
+
+  # If the role/db already existed, first try connecting using apps/backend/.env credentials.
+  if can_connect_db "$db_host" "$db_port" "$db_user" "$db_pass" "$db_name"; then
+    info "Connection as DB_USERNAME/DB_PASSWORD succeeded"
+    return
+  fi
+
+  warn "Connection as DB_USERNAME/DB_PASSWORD failed"
+
+  # In non-interactive mode, prefer resetting the role password to match apps/backend/.env.
+  if [[ "$YES" -eq 1 ]]; then
+    warn "Resetting DB role password to match apps/backend/.env (non-interactive)"
+    psql_as_postgres "ALTER ROLE \"${db_user//\"/\"\"}\" WITH LOGIN PASSWORD '${db_pass//\'/\'\'}';" >/dev/null
+    can_connect_db "$db_host" "$db_port" "$db_user" "$db_pass" "$db_name" || die "DB credentials still invalid after resetting role password."
+    info "Connection succeeded after password reset"
+    return
+  fi
+
+  # Interactive: offer to reset the password to match apps/backend/.env, or let user provide the current password.
+  if confirm "Reset DB role password to match apps/backend/.env (recommended)?" ; then
+    info "Resetting DB role password"
+    psql_as_postgres "ALTER ROLE \"${db_user//\"/\"\"}\" WITH LOGIN PASSWORD '${db_pass//\'/\'\'}';" >/dev/null
+    can_connect_db "$db_host" "$db_port" "$db_user" "$db_pass" "$db_name" || die "DB credentials still invalid after resetting role password."
+    info "Connection succeeded after password reset"
+    return
+  fi
+
+  local provided_pass=""
+  prompt_secret "Enter existing password for DB user \"${db_user}\"" provided_pass
+  if [[ -z "$provided_pass" ]]; then
+    die "No password provided and password reset declined."
+  fi
+
+  # Update apps/backend/.env to the provided password so Prisma uses it.
+  local backend_env="apps/backend/.env"
+  env_set "$backend_env" "DB_PASSWORD" "$provided_pass"
+  local db_url="postgresql://${db_user}:${provided_pass}@${db_host}:${db_port}/${db_name}?schema=public"
+  env_set "$backend_env" "DATABASE_URL" "$db_url"
+
+  can_connect_db "$db_host" "$db_port" "$db_user" "$provided_pass" "$db_name" || die "DB credentials invalid (unable to connect)."
+  info "Connection succeeded with provided password"
 }
 
 run_prisma() {
@@ -402,21 +466,21 @@ run_prisma() {
   if [[ "$VERBOSE" -eq 1 ]]; then
     pnpm --filter backend prisma:generate
   else
-    pnpm --filter backend prisma:generate --silent
+    pnpm --silent --filter backend prisma:generate
   fi
 
   info "Applying migrations"
   if [[ "$VERBOSE" -eq 1 ]]; then
     pnpm --filter backend prisma:migrate:deploy
   else
-    pnpm --filter backend prisma:migrate:deploy --silent
+    pnpm --silent --filter backend prisma:migrate:deploy
   fi
 
   info "Seeding database"
   if [[ "$VERBOSE" -eq 1 ]]; then
     pnpm --filter backend prisma:seed
   else
-    pnpm --filter backend prisma:seed --silent
+    pnpm --silent --filter backend prisma:seed
   fi
 }
 
