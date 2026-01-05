@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import readline from "node:readline";
 
 // =========================================================
 //                         UI
@@ -70,6 +71,28 @@ function runCapture(command, args, { env, cwd } = {}) {
   };
 }
 
+function canRun(command, args = []) {
+  try {
+    const res = runCapture(command, args);
+    return res.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function promptYesNo(question, { defaultYes = false } = {}) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const suffix = defaultYes ? " [Y/n] " : " [y/N] ";
+  const answer = await new Promise((resolve) => rl.question(`${question}${suffix}`, resolve));
+  rl.close();
+
+  const normalized = String(answer ?? "").trim().toLowerCase();
+  if (!normalized) return defaultYes;
+  if (["y", "yes"].includes(normalized)) return true;
+  if (["n", "no"].includes(normalized)) return false;
+  return defaultYes;
+}
+
 // =========================================================
 //                  FILES / ENV PARSING
 // =========================================================
@@ -109,6 +132,13 @@ function parseDotenvLike(lines) {
     vars[key] = value;
   }
   return vars;
+}
+
+function readDotenvFile(filePath) {
+  if (!fileExists(filePath)) return {};
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.replaceAll("\r\n", "\n").split("\n");
+  return parseDotenvLike(lines);
 }
 
 // =========================================================
@@ -173,6 +203,25 @@ function removeEnvFiles({ repoRoot, dryRun }) {
 // =========================================================
 //                        DATABASE
 // =========================================================
+function resetDatabaseWithPrisma({ dryRun } = {}) {
+  step("Database cleanup (prisma reset)");
+
+  const hasPnpm =
+    runCapture("bash", ["-lc", "command -v pnpm >/dev/null 2>&1 && echo yes || echo no"]).stdout.trim() === "yes";
+  if (!hasPnpm) {
+    warn("pnpm not found; cannot run prisma reset.");
+    return false;
+  }
+
+  if (dryRun) {
+    info("Would run: pnpm --filter backend prisma:reset");
+    return true;
+  }
+
+  run("pnpm", ["--filter", "backend", "prisma:reset"]);
+  return true;
+}
+
 function dropDatabaseAndRole({ repoRoot, dryRun }) {
   step("Database cleanup (drop db/role)");
 
@@ -262,6 +311,7 @@ function parseArgs(argv) {
     dryRun: flags.has("--dry-run"),
     skipDb: flags.has("--skip-db"),
     purgePostgres: flags.has("--purge-postgres"),
+    interactive: flags.has("--interactive"),
   };
 }
 
@@ -274,18 +324,44 @@ async function main() {
   step("Uninstall / reset");
   hr();
 
-  if (!args.yes && !args.dryRun) {
+  const canPrompt = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const interactive = args.interactive || (!args.yes && !args.dryRun && canPrompt);
+
+  if (!args.yes && !args.dryRun && !interactive) {
     die("Refusing to run without confirmation. Re-run with `--yes` (or preview with `--dry-run`).");
+  }
+
+  if (interactive && !args.dryRun) {
+    const proceed = await promptYesNo("Proceed with uninstall/reset?", { defaultYes: false });
+    if (!proceed) {
+      step("Canceled");
+      return;
+    }
+  }
+
+  const shouldHandleDb =
+    !args.skipDb &&
+    (args.yes ||
+      args.dryRun ||
+      (interactive &&
+        (await promptYesNo("Reset database? (drop or prisma reset)", { defaultYes: true }))));
+
+  if (args.skipDb) {
+    step("Database cleanup (skipped)");
+  } else if (shouldHandleDb) {
+    const hasPsql = canRun("psql", ["--version"]);
+    if (hasPsql) {
+      dropDatabaseAndRole({ repoRoot, dryRun: args.dryRun });
+    } else {
+      warn("psql not found; falling back to Prisma reset.");
+      resetDatabaseWithPrisma({ dryRun: args.dryRun });
+    }
+  } else {
+    step("Database cleanup (skipped)");
   }
 
   removeEnvFiles({ repoRoot, dryRun: args.dryRun });
   removeGeneratedFiles({ repoRoot, dryRun: args.dryRun });
-
-  if (!args.skipDb) {
-    dropDatabaseAndRole({ repoRoot, dryRun: args.dryRun });
-  } else {
-    step("Database cleanup (skipped)");
-  }
 
   if (args.purgePostgres) {
     warn("This will remove system packages; only use if you installed Postgres solely for StackTrack.");

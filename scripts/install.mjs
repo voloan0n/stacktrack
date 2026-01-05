@@ -2,6 +2,9 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import readline from "node:readline";
+
+let VERBOSE = false;
 
 // =========================================================
 //                         UI
@@ -45,14 +48,34 @@ function die(message) {
 // =========================================================
 function run(command, args, { env, cwd } = {}) {
   step(`Running: ${command} ${args.join(" ")}`);
+  const shouldInherit = VERBOSE;
   const result = spawnSync(command, args, {
-    stdio: "inherit",
+    stdio: shouldInherit ? "inherit" : ["ignore", "pipe", "pipe"],
     shell: false,
     cwd: cwd ?? process.cwd(),
     env: { ...process.env, ...env },
+    ...(shouldInherit ? {} : { encoding: "utf8" }),
   });
   if (result.error) throw result.error;
-  if (typeof result.status === "number" && result.status !== 0) process.exit(result.status);
+  if (typeof result.status === "number" && result.status !== 0) {
+    if (!shouldInherit) {
+      if (result.stdout) process.stdout.write(String(result.stdout));
+      if (result.stderr) process.stderr.write(String(result.stderr));
+    }
+    process.exit(result.status);
+  }
+}
+
+function runTry(command, args, { env, cwd } = {}) {
+  const result = spawnSync(command, args, {
+    stdio: VERBOSE ? "inherit" : ["ignore", "pipe", "pipe"],
+    shell: false,
+    cwd: cwd ?? process.cwd(),
+    env: { ...process.env, ...env },
+    ...(VERBOSE ? {} : { encoding: "utf8" }),
+  });
+  if (result.error) throw result.error;
+  return typeof result.status === "number" ? result.status : 1;
 }
 
 function runCapture(command, args, { env, cwd } = {}) {
@@ -69,6 +92,96 @@ function runCapture(command, args, { env, cwd } = {}) {
     stdout: (result.stdout ?? "").trim(),
     stderr: (result.stderr ?? "").trim(),
   };
+}
+
+function canRun(command, args = []) {
+  try {
+    const res = runCapture(command, args);
+    return res.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+function escapeSqlLiteral(value) {
+  return String(value ?? "").replaceAll("'", "''");
+}
+
+function escapeSqlIdentifier(value) {
+  return `"${String(value ?? "").replaceAll('"', '""')}"`;
+}
+
+function psqlCapture(sql, { user, password, host, port, database } = {}) {
+  // Use `-w` so psql never prompts interactively (bootstrap should be non-blocking).
+  const args = ["-w", "-v", "ON_ERROR_STOP=1", "-tAc", sql];
+  if (host) args.unshift("-h", String(host));
+  if (port) args.unshift("-p", String(port));
+  if (user) args.unshift("-U", String(user));
+  if (database) args.unshift("-d", String(database));
+
+  const env = {};
+  if (typeof password === "string") env.PGPASSWORD = password;
+
+  return runCapture("psql", args, { env });
+}
+
+async function promptSecret(question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+  rl.stdoutMuted = true;
+  rl._writeToOutput = function _writeToOutput(stringToWrite) {
+    if (rl.stdoutMuted) rl.output.write("*");
+    else rl.output.write(stringToWrite);
+  };
+
+  const answer = await new Promise((resolve) => rl.question(`${question}: `, resolve));
+  rl.close();
+  process.stdout.write("\n");
+  return String(answer ?? "");
+}
+
+async function promptYesNo(question, { defaultYes = false } = {}) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const suffix = defaultYes ? " [Y/n] " : " [y/N] ";
+  const answer = await new Promise((resolve) => rl.question(`${question}${suffix}`, resolve));
+  rl.close();
+  const normalized = String(answer ?? "").trim().toLowerCase();
+  if (!normalized) return defaultYes;
+  if (["y", "yes"].includes(normalized)) return true;
+  if (["n", "no"].includes(normalized)) return false;
+  return defaultYes;
+}
+
+function setEnvVarIfMissingOrPlaceholder(lines, key, nextValue, placeholders = []) {
+  const keyRegex = new RegExp(`^\\s*${key.replaceAll(".", "\\.")}\\s*=`);
+  const placeholderSet = new Set(placeholders.map((p) => String(p).toLowerCase()));
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (isCommentLine(line)) continue;
+    if (!keyRegex.test(line)) continue;
+
+    const assigned = stripWrappingQuotes(getAssignedValue(line));
+    const normalized = String(assigned).trim().toLowerCase();
+    if (assigned.length > 0 && !placeholderSet.has(normalized)) return { updated: false };
+
+    const hadDoubleQuotes = getAssignedValue(line).trimStart().startsWith("\"");
+    const renderedValue = hadDoubleQuotes ? `"${nextValue}"` : nextValue;
+    lines[i] = `${key}=${renderedValue}`;
+    return { updated: true };
+  }
+
+  lines.push(`${key}="${nextValue}"`);
+  return { updated: true };
+}
+
+function updateEnvFileValue(filePath, key, nextValue) {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const lines = raw.replaceAll("\r\n", "\n").split("\n");
+  const result = setEnvVarPreservingLayout(lines, key, nextValue, { onlyIfMissingOrPlaceholder: false });
+  if (result.updated) {
+    fs.writeFileSync(filePath, `${lines.join("\n").trimEnd()}\n`, "utf8");
+  }
+  return result.updated;
 }
 
 // =========================================================
@@ -174,7 +287,7 @@ function materializeDatabaseUrl(lines) {
   if (!needsMaterialize) return { changed: false };
 
   const username = vars.DB_USERNAME || "stacktrack";
-  const password = vars.DB_PASSWORD || "changeme123";
+  const password = vars.DB_PASSWORD || "stacktrack";
   const host = vars.DB_HOST || "localhost";
   const port = vars.DB_PORT || "5432";
   const dbName = vars.DB_NAME || "stacktrack";
@@ -192,6 +305,7 @@ function materializeDatabaseUrl(lines) {
 function updateBackendEnv(backendEnvPath) {
   const raw = fs.readFileSync(backendEnvPath, "utf8");
   const lines = raw.replaceAll("\r\n", "\n").split("\n");
+  const vars = parseDotenvLike(lines);
 
   const jwtSecret = randomHex(32);
   const cookieSecret = randomHex(32);
@@ -218,6 +332,12 @@ function updateBackendEnv(backendEnvPath) {
   }
   fs.writeFileSync(backendEnvPath, `${lines.join("\n").trimEnd()}\n`, "utf8");
   return { changed: true };
+}
+
+function readBackendEnvVars(backendEnvPath) {
+  const raw = fs.readFileSync(backendEnvPath, "utf8");
+  const lines = raw.replaceAll("\r\n", "\n").split("\n");
+  return parseDotenvLike(lines);
 }
 
 function setupEnvFiles({ repoRoot }) {
@@ -252,16 +372,13 @@ function readPackageManagerSpec(repoRoot) {
 
 function ensurePnpmAvailable({ repoRoot }) {
   step("Package manager (pnpm)");
-  const hasPnpm = runCapture("bash", ["-lc", "command -v pnpm >/dev/null 2>&1 && echo yes || echo no"])
-    .stdout.trim() === "yes";
+  const hasPnpm = canRun("pnpm", ["--version"]);
   if (hasPnpm) {
     info("pnpm already installed");
     return;
   }
 
-  const hasCorepack =
-    runCapture("bash", ["-lc", "command -v corepack >/dev/null 2>&1 && echo yes || echo no"]).stdout.trim() ===
-    "yes";
+  const hasCorepack = canRun("corepack", ["--version"]);
   if (!hasCorepack) {
     die("pnpm not found, and corepack is not available. Install Node.js (with corepack) or install pnpm manually.");
   }
@@ -289,17 +406,16 @@ function installDependencies() {
 // =========================================================
 function ensurePostgresInstalled() {
   step("Postgres");
-  const hasPsql =
-    runCapture("bash", ["-lc", "command -v psql >/dev/null 2>&1 && echo yes || echo no"]).stdout.trim() === "yes";
+  const hasPsql = canRun("psql", ["--version"]);
   if (hasPsql) {
     info("Postgres client found");
     return;
   }
 
-  const hasApt =
-    runCapture("bash", ["-lc", "command -v apt-get >/dev/null 2>&1 && echo yes || echo no"]).stdout.trim() === "yes";
+  const hasApt = canRun("apt-get", ["--version"]);
   if (!hasApt) {
-    die("psql not found and apt-get is not available. Install PostgreSQL manually, then re-run.");
+    warn("psql not found and apt-get is not available; skipping Postgres installation.");
+    return;
   }
 
   info("Installing PostgreSQL via apt-get (requires root + network)");
@@ -308,15 +424,18 @@ function ensurePostgresInstalled() {
 }
 
 function ensurePostgresRunning() {
-  const isReady = runCapture("bash", ["-lc", "pg_isready >/dev/null 2>&1 && echo yes || echo no"]).stdout.trim();
-  if (isReady === "yes") {
+  if (!canRun("pg_isready", ["--help"])) {
+    warn("pg_isready not found; skipping Postgres readiness check.");
+    return;
+  }
+
+  const isReady = runCapture("pg_isready", []).status === 0;
+  if (isReady) {
     info("Postgres is accepting connections");
     return;
   }
 
-  const hasSystemctl =
-    runCapture("bash", ["-lc", "command -v systemctl >/dev/null 2>&1 && echo yes || echo no"]).stdout.trim() ===
-    "yes";
+  const hasSystemctl = canRun("systemctl", ["--version"]);
 
   if (hasSystemctl) {
     info("Starting postgresql service");
@@ -325,8 +444,8 @@ function ensurePostgresRunning() {
     warn("systemctl not available; ensure Postgres is running.");
   }
 
-  const isReadyAfter = runCapture("bash", ["-lc", "pg_isready >/dev/null 2>&1 && echo yes || echo no"]).stdout.trim();
-  if (isReadyAfter !== "yes") {
+  const isReadyAfter = runCapture("pg_isready", []).status === 0;
+  if (!isReadyAfter) {
     warn("pg_isready still failing; database commands may fail until Postgres is running.");
   }
 }
@@ -334,43 +453,101 @@ function ensurePostgresRunning() {
 // =========================================================
 //                  DATABASE BOOTSTRAP
 // =========================================================
-function ensureDatabaseFromEnv(backendEnvPath) {
+async function ensureDatabaseFromEnv(backendEnvPath) {
   step("Database (create role/db)");
+
+  if (!canRun("psql", ["--version"])) {
+    warn("psql not found; skipping automatic role/db creation.");
+    return;
+  }
 
   const raw = fs.readFileSync(backendEnvPath, "utf8");
   const lines = raw.replaceAll("\r\n", "\n").split("\n");
   const vars = parseDotenvLike(lines);
 
   const dbUser = vars.DB_USERNAME || "stacktrack";
-  const dbPass = vars.DB_PASSWORD || "changeme123";
+  const dbPass = vars.DB_PASSWORD || "stacktrack";
   const dbName = vars.DB_NAME || "stacktrack";
+  const dbHost = vars.DB_HOST || "localhost";
+  const dbPort = vars.DB_PORT || "5432";
+  const adminUser = vars.DB_ADMIN_USER || process.env.DB_ADMIN_USER || "postgres";
+  let adminPass = vars.DB_ADMIN_PASSWORD || process.env.DB_ADMIN_PASSWORD || "";
 
   info(`DB user: ${dbUser}`);
   info(`DB name: ${dbName}`);
 
-  const psqlAsPostgres = (sql) =>
-    runCapture("bash", ["-lc", `su - postgres -c "psql -tAc \\"${sql.replaceAll('"', '\\"')}\\""`]);
-
   const canSu = runCapture("bash", ["-lc", "id -u postgres >/dev/null 2>&1 && echo yes || echo no"]).stdout.trim();
-  if (canSu !== "yes") {
-    warn("postgres OS user not found; skipping automatic role/db creation.");
+  const canPrompt = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const canPsqlAsAdminWith = (password) =>
+    canSu === "yes" ||
+    psqlCapture("SELECT 1", {
+      user: adminUser,
+      password: password || undefined,
+      host: dbHost,
+      port: dbPort,
+      database: "postgres",
+    }).status === 0;
+
+  if (canSu !== "yes" && !adminPass && canPrompt) {
+    info(`Postgres admin user detected as "${adminUser}"`);
+    adminPass = await promptSecret("Enter Postgres admin password (won't be saved)");
+  }
+
+  const canPsqlAsAdmin = canPsqlAsAdminWith(adminPass);
+
+  const psqlAsAdmin = (sql) => {
+    if (canSu === "yes") {
+      return runCapture("bash", ["-lc", `su - postgres -c "psql -v ON_ERROR_STOP=1 -tAc \\"${sql.replaceAll('"', '\\"')}\\""`]);
+    }
+    return psqlCapture(sql, {
+      user: adminUser,
+      password: adminPass || undefined,
+      host: dbHost,
+      port: dbPort,
+      database: "postgres",
+    });
+  };
+
+  if (!canPsqlAsAdmin) {
+    warn("Could not connect as a DB admin user; skipping automatic role/db creation.");
+    warn("Set DB_ADMIN_PASSWORD in apps/backend/.env, or provide it via env when running bootstrap.");
+    warn("Example: DB_ADMIN_PASSWORD=... pnpm run bootstrap -- --skip-install --skip-env");
     return;
   }
 
-  const roleExists = psqlAsPostgres(`SELECT 1 FROM pg_roles WHERE rolname='${dbUser}'`).stdout === "1";
+  const roleExists = psqlAsAdmin(`SELECT 1 FROM pg_roles WHERE rolname='${escapeSqlLiteral(dbUser)}'`).stdout === "1";
   if (!roleExists) {
     info("Creating DB role");
-    psqlAsPostgres(`CREATE ROLE "${dbUser}" WITH LOGIN PASSWORD '${dbPass.replaceAll("'", "''")}'`);
+    psqlAsAdmin(
+      `CREATE ROLE ${escapeSqlIdentifier(dbUser)} WITH LOGIN PASSWORD '${escapeSqlLiteral(dbPass)}'`
+    );
   } else {
     info("DB role already exists");
+    info("Syncing DB role password from apps/backend/.env");
+    psqlAsAdmin(
+      `ALTER ROLE ${escapeSqlIdentifier(dbUser)} WITH LOGIN PASSWORD '${escapeSqlLiteral(dbPass)}'`
+    );
   }
 
-  const dbExists = psqlAsPostgres(`SELECT 1 FROM pg_database WHERE datname='${dbName}'`).stdout === "1";
+  const dbExists = psqlAsAdmin(`SELECT 1 FROM pg_database WHERE datname='${escapeSqlLiteral(dbName)}'`).stdout === "1";
   if (!dbExists) {
     info("Creating database");
-    psqlAsPostgres(`CREATE DATABASE "${dbName}" OWNER "${dbUser}"`);
+    psqlAsAdmin(`CREATE DATABASE ${escapeSqlIdentifier(dbName)} OWNER ${escapeSqlIdentifier(dbUser)}`);
   } else {
     info("Database already exists");
+  }
+
+  const canConnectAsAppUser =
+    psqlCapture("SELECT 1", {
+      user: dbUser,
+      password: dbPass,
+      host: dbHost,
+      port: dbPort,
+      database: dbName,
+    }).status === 0;
+  if (!canConnectAsAppUser) {
+    warn("Created/updated role/database, but connection as DB_USERNAME/DB_PASSWORD still fails.");
+    warn("Double-check DB_HOST/DB_PORT and that Postgres is configured to allow password auth for that user.");
   }
 }
 
@@ -396,12 +573,14 @@ function parseArgs(argv) {
     skipPostgres: flags.has("--skip-postgres"),
     skipDbCreate: flags.has("--skip-db-create"),
     skipDb: flags.has("--skip-db"),
+    verbose: flags.has("--verbose"),
   };
 }
 
 async function main() {
   const repoRoot = process.cwd();
   const args = parseArgs(process.argv);
+  VERBOSE = Boolean(args.verbose || process.env.STACKTRACK_VERBOSE === "1");
 
   banner();
   hr();
@@ -422,7 +601,7 @@ async function main() {
   }
 
   if (!args.skipDbCreate && !args.skipDb) {
-    ensureDatabaseFromEnv(backendEnvPath);
+    await ensureDatabaseFromEnv(backendEnvPath);
   }
 
   if (!args.skipDb) {
