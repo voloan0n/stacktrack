@@ -432,7 +432,7 @@ async function main() {
   hr();
   step("Done");
   info("Next: run `pnpm dev`");
-  info("Admin user is `admin@stacktrack.local` (password prints during seed on first run)");
+  info("Admin user is `admin@stacktrack.io` (password prints during seed on first run)");
 }
 
 main().catch((e) => {

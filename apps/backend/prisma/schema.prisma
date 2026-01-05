@@ -1,0 +1,421 @@
+// =========================================================
+//                     GENERATOR / DB
+// =========================================================
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearchPostgres"]
+  engineType      = "binary"
+  binaryTargets   = ["native", "linux-musl-arm64-openssl-1.1.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =========================================================
+//                     SHARED ENUMS
+// =========================================================
+enum TicketPriority {
+  low
+  medium
+  high
+  urgent
+}
+
+enum Hook {
+  ticket_created
+  ticket_status_changed
+}
+
+// =========================================================
+//                   AUTH & ACCESS CONTROL
+// =========================================================
+model Role {
+  id          String       @id @default(uuid())
+  name        String       @unique
+  description String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  users       User[]
+  permissions Permission[] @relation("RolePermissions")
+
+  @@index([name])
+}
+
+model Permission {
+  id   String @id @default(uuid())
+  name String @unique
+
+  roles Role[] @relation("RolePermissions")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name        String
+  email       String  @unique
+  phone       String?
+  password    String?
+  image       String?
+  accentColor String?
+  language    String? @default("en")
+  firstLogin  Boolean @default(true)
+
+  notify_ticket_assigned       Boolean @default(true)
+  notify_ticket_status_changed Boolean @default(true)
+  notify_ticket_comments       Boolean @default(true)
+
+  // RBAC (Single Role)
+  roleId String?
+  role   Role?   @relation(fields: [roleId], references: [id])
+
+  sessions           Session[]
+  ticketsOwned       Ticket[]             @relation("CreatedTickets")
+  tickets            Ticket[]             @relation("AssignedTickets")
+  ticketAssignments  TicketAssignment[]
+  assignmentActions  TicketAssignment[]   @relation("AssignmentActor")
+  comments           Comment[]
+  notifications      Notification[]
+  notificationActions Notification[] @relation("NotificationActor")
+  notificationPreferences NotificationPreferences?
+  timeEntries        TimeTracking[]
+  PasswordResetToken PasswordResetToken[]
+  Notes              Notes[]
+  Webhook            Webhook[]
+
+  @@index([email])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  createdAt    DateTime @default(now())
+  userAgent    String?
+  ipAddress    String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  userId    String
+  expiresAt DateTime @default(dbgenerated("now() + interval '1 day'"))
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// =========================================================
+//                 CLIENTS & RELATIONSHIPS
+// =========================================================
+model Client {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name        String
+  email       String?    @unique
+  phone       String?
+
+  miscNotes       String?
+
+  addressLine1  String?
+  addressCity   String?
+  addressState  String?
+  addressPostal String?
+  country       String? @default("US")
+
+  tickets            Ticket[]
+  notes              Notes[]
+  timeEntries        TimeTracking[]
+
+  @@index([name])
+}
+
+model Notes {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  title   String
+  content String?
+  pinned  Boolean @default(false)
+
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  ticketId String?
+  ticket   Ticket? @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  userId   String?
+  author   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([clientId])
+  @@index([ticketId])
+  @@index([userId])
+}
+
+// =========================================================
+//             TICKETS, COMMENTS & WORKLOGS
+// =========================================================
+model Ticket {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  number         Int                 @default(autoincrement())
+  title          String
+  detail         Json?
+  quickNotes     String?
+  email          String?
+  priority       TicketPriority      @default(low)
+  status         String              @default("new")
+  type           String              @default("support")
+  internalOnly   Boolean             @default(false)
+  isComplete     Boolean             @default(false)
+  statusOptionId String?
+  statusOption   TicketStatusOption? @relation(fields: [statusOptionId], references: [id], onDelete: SetNull)
+  typeOptionId   String?
+  typeOption     TicketTypeOption?   @relation(fields: [typeOptionId], references: [id], onDelete: SetNull)
+
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [id])
+
+  assignedToId String?
+  assignedTo   User?   @relation("AssignedTickets", fields: [assignedToId], references: [id])
+
+  createdById String?
+  createdBy   User?   @relation("CreatedTickets", fields: [createdById], references: [id])
+
+	  assignees     TicketAssignment[]
+	  comments      Comment[]
+	  timeEntries   TimeTracking[]
+	  notes         Notes[]
+
+	  @@index([clientId])
+	  @@index([assignedToId])
+	  @@index([status])
+  @@index([type])
+  @@index([internalOnly])
+  @@index([statusOptionId])
+  @@index([typeOptionId])
+  @@index([createdAt])
+}
+
+model Comment {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  text     String
+  public   Boolean @default(false)
+  internal Boolean @default(false)
+
+  userId   String?
+  user     User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  ticketId String
+  ticket   Ticket  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+  @@index([userId])
+}
+
+model TimeTracking {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  title       String
+  comment     String?
+  durationMin Int
+  billable    Boolean @default(false)
+
+  userId    String?
+  user      User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  ticketId  String?
+  ticket    Ticket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  companyId String?
+  company   Client? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([ticketId])
+  @@index([companyId])
+  @@index([createdAt])
+}
+
+model TicketAssignment {
+  id         String   @id @default(uuid())
+  assignedAt DateTime @default(now())
+  isPrimary  Boolean  @default(false)
+
+  ticketId String
+  ticket   Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  assignedById String?
+  assignedBy   User?   @relation("AssignmentActor", fields: [assignedById], references: [id], onDelete: SetNull)
+
+  @@unique([ticketId, userId])
+  @@index([userId])
+  @@index([assignedById])
+}
+
+// =========================================================
+//               NOTIFICATIONS & WEBHOOKS
+// =========================================================
+model Notification {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  readAt    DateTime?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  actorUserId String?
+  actor       User?   @relation("NotificationActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  type       String
+  entityType String
+  entityId   String
+  ticketNumber Int?
+  title      String
+  body       String
+  preview    String?
+
+  @@index([userId])
+  @@index([actorUserId])
+  @@index([readAt])
+  @@index([createdAt])
+}
+
+model NotificationTemplate {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  type    String
+  variant String
+
+  titleTemplate   String
+  bodyTemplate    String
+
+  @@unique([type, variant])
+  @@index([type])
+}
+
+model NotificationPreferences {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  enabled         Boolean @default(true)
+  onTicketCreated Boolean @default(true)
+  onTicketAssigned Boolean @default(true)
+  onStatusUpdate  Boolean @default(true)
+  onInternalNote  Boolean @default(true)
+}
+
+model Webhook {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  name        String
+  url         String
+  type        Hook
+  active      Boolean  @default(true)
+  secret      String?
+  createdById String?
+
+  createdBy User? @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([type])
+  @@index([active])
+}
+
+// =========================================================
+//                TICKET OPTIONS & KB
+// =========================================================
+model TicketStatusOption {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  key         String   @unique
+  label       String
+  description String?
+  // Optional business-hour SLA deadline for next action (in hours).
+  nextActionDueHours Int?
+  // Optional logical color token key (e.g. "primary", "success", or a custom color key)
+  colorKey    String?
+  order       Int      @default(0)
+  active      Boolean  @default(true)
+  isDefault   Boolean  @default(false)
+  Ticket      Ticket[]
+}
+
+model TicketTypeOption {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  key         String   @unique
+  label       String
+  description String?
+  // Optional logical color token key (e.g. "primary", "success", or a custom color key)
+  colorKey    String?
+  order       Int      @default(0)
+  active      Boolean  @default(true)
+  isDefault   Boolean  @default(false)
+  Ticket      Ticket[]
+}
+
+model TicketSupportTypeOption {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  key       String  @unique
+  label     String
+  order     Int     @default(0)
+  active    Boolean @default(true)
+  isDefault Boolean @default(false)
+}
+
+model TicketBillingTypeOption {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  key       String  @unique
+  label     String
+  order     Int     @default(0)
+  active    Boolean @default(true)
+  isDefault Boolean @default(false)
+}
+
+// Priority metadata (labels, ordering, associated colors) for TicketPriority enum values.
+model TicketPriorityOption {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Must match a TicketPriority enum value (e.g. "low", "medium", "high", "urgent")
+  key      String   @unique
+  label    String
+  order    Int      @default(0)
+  active   Boolean  @default(true)
+  isDefault Boolean @default(false)
+  // Optional logical color token key (e.g. "primary", "success")
+  colorKey String?
+}
