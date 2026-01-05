@@ -15,7 +15,8 @@
     "start:backend": "pnpm --filter backend start",
     "start:frontend": "pnpm --filter frontend start",
     "lint": "pnpm -r lint",
-    "format": "prettier --config config/prettier.config.js --write \"**/*.{ts,tsx,md,json,yml,yaml}\""
+    "format": "prettier --config config/prettier.config.js --write \"**/*.{ts,tsx,md,json,yml,yaml}\"",
+    "uninstall": "node scripts/uninstall.mjs"
   },
   "devDependencies": {
     "prettier": "^3.2.5"

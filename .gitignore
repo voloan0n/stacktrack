@@ -61,10 +61,6 @@ Thumbs.db
 # Secrets / keys
 *.pem
 *.key
-yes.pub
 
 # Storybook (future)
 storybook-static/
-
-# Local backups
-apps-git-backup.tgz

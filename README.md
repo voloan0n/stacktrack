@@ -58,7 +58,7 @@ pnpm bootstrap
 
 This will:
 
-- Create `apps/backend/.env` from `apps/backend/.env.example` (if missing) and generate `JWT_SECRET` + `COOKIE_SECRET`
+- Create `apps/backend/.env` from `apps/backend/.env.example` (if missing) and generate `JWT_SECRET` + `COOKIE_SECRET` + `APP_SECRET`
 - Create `apps/frontend/.env.local` from `apps/frontend/.env.example` (if missing)
 
 ## One-command bootstrap (recommended)
@@ -68,6 +68,17 @@ After cloning, this will install dependencies, create env files/secrets, run Pri
 ```bash
 pnpm bootstrap
 ```
+
+## Reset / uninstall (local)
+
+This removes generated env files, build artifacts, workspace `node_modules`, and (by default) drops the local Postgres db/role based on `apps/backend/.env`:
+
+```bash
+pnpm uninstall -- --dry-run
+pnpm uninstall -- --yes
+```
+
+To keep the database, add `--skip-db`.
 
 Notes:
 
