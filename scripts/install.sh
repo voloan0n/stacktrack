@@ -153,7 +153,7 @@ ensure_node() {
   if command -v node >/dev/null 2>&1; then
     local major
     major="$(node_major)"
-    info "Found Node.js v$(node -v)"
+    info "Found Node.js $(node -v)"
     if [[ "$major" -ge 20 ]]; then
       return
     fi
@@ -173,7 +173,7 @@ ensure_node() {
   fi
 
   command -v node >/dev/null 2>&1 || die "Node.js install failed"
-  info "Using Node.js v$(node -v)"
+  info "Using Node.js $(node -v)"
 }
 
 ensure_corepack_pnpm() {
@@ -346,7 +346,7 @@ ensure_postgres() {
 psql_as_postgres() {
   local sql="$1"
   # `-X` ignores ~/.psqlrc so output is stable (no footers/format tweaks).
-  su - postgres -c "psql -X -q -P footer=off -v ON_ERROR_STOP=1 -tAc \"$sql\""
+  su - postgres -c "psql -X -q -A -t -v ON_ERROR_STOP=1 -c \"$sql\""
 }
 
 can_connect_db() {
@@ -401,14 +401,20 @@ ensure_db_role_and_database() {
 
   if [[ "$role_exists" != "1" ]]; then
     info "Creating DB role"
-    psql_as_postgres "CREATE ROLE \"${db_user//\"/\"\"}\" WITH LOGIN PASSWORD '${db_pass//\'/\'\'}';" >/dev/null
+    if ! psql_as_postgres "CREATE ROLE \"${db_user//\"/\"\"}\" WITH LOGIN PASSWORD '${db_pass//\'/\'\'}';" >/dev/null; then
+      role_exists="$(psql_as_postgres "SELECT 1 FROM pg_roles WHERE rolname='${db_user//\'/\'\'}'" | tr -d '[:space:]')"
+      [[ "$role_exists" == "1" ]] || die "Failed to create DB role."
+    fi
   else
     info "DB role already exists"
   fi
 
   if [[ "$db_exists" != "1" ]]; then
     info "Creating database"
-    psql_as_postgres "CREATE DATABASE \"${db_name//\"/\"\"}\" OWNER \"${db_user//\"/\"\"}\";" >/dev/null
+    if ! psql_as_postgres "CREATE DATABASE \"${db_name//\"/\"\"}\" OWNER \"${db_user//\"/\"\"}\";" >/dev/null; then
+      db_exists="$(psql_as_postgres "SELECT 1 FROM pg_database WHERE datname='${db_name//\'/\'\'}'" | tr -d '[:space:]')"
+      [[ "$db_exists" == "1" ]] || die "Failed to create database."
+    fi
   else
     info "Database already exists"
   fi

@@ -132,6 +132,8 @@ drop_db_and_role() {
 main() {
   log "Uninstall / reset"
 
+  drop_db_and_role
+
   rm_path "apps/backend/.env"
   rm_path "apps/frontend/.env.local"
 
@@ -141,8 +143,6 @@ main() {
 
   rm_path "apps/backend/dist"
   rm_path "apps/frontend/.next"
-
-  drop_db_and_role
 
   log "Done"
   if [[ "$DRY_RUN" -eq 1 ]]; then
